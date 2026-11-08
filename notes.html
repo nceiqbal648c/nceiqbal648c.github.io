@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b1020">
+<title>Private Notes</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;color:#eef2ff;min-height:100vh;padding:20px 16px 40px;background:linear-gradient(-45deg,#0b1020,#1b1147,#0f2a4a,#2a0f3d)}
+.wrap{max-width:560px;margin:0 auto}
+h1{font-size:24px;margin:10px 0 16px;background:linear-gradient(90deg,#a5b4fc,#f9a8d4);-webkit-background-clip:text;background-clip:text;color:transparent}
+input,textarea{width:100%;padding:13px;border-radius:12px;border:1px solid #ffffff33;background:#0b1020;color:#eef2ff;font-size:16px;font-family:inherit;margin-bottom:10px}
+textarea{min-height:55vh}
+button{padding:12px 16px;border:0;border-radius:12px;font-weight:700;color:#fff;background:#ffffff22;font-size:14px}
+.pri{background:linear-gradient(90deg,#6366f1,#ec4899)}
+.bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.bar .pri{flex:1}
+.note{background:#ffffff0f;border:1px solid #ffffff22;border-radius:14px;padding:14px;margin-bottom:10px}
+.note b{display:block;margin-bottom:4px}
+.note small{color:#8b93c4}
+.msg{color:#f9a8d4;margin:6px 0;min-height:20px;font-size:14px}
+.hint{color:#c7d2fe;font-size:14px;margin-bottom:12px;line-height:1.5}
+.hide{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>🔐 Private Notes</h1>
+
+<div id="login">
+<p class="hint" id="hint"></p>
+<input id="pw" type="password" placeholder="Password">
+<input id="pw2" type="password" placeholder="Password abar likhun" class="hide">
+<div class="msg" id="msg"></div>
+<button class="pri" style="width:100%" onclick="unlock()">Unlock</button>
+<div class="bar" style="margin-top:14px"><button onclick="restore()">Restore backup</button></div>
+</div>
+
+<div id="list" class="hide">
+<div class="bar"><button class="pri" onclick="edit(null)">＋ New note</button><button onclick="backup()">💾 Backup</button><button onclick="lock()">🔒 Lock</button></div>
+<input id="q" placeholder="Search..." oninput="draw()">
+<div id="items"></div>
+</div>
+
+<div id="editor" class="hide">
+<input id="t" placeholder="Title">
+<textarea id="x" placeholder="Likhun..."></textarea>
+<div class="bar"><button class="pri" onclick="saveNote()">Save</button><button onclick="show()">Back</button><button onclick="delNote()" id="dbtn">🗑️</button></div>
+</div>
+</div>
+
+<script>
+const K='nb_data',S='nb_salt',$=id=>document.getElementById(id);
+const enc=new TextEncoder(),dec=new TextDecoder();
+let key=null,notes=[],cur=null;
+const b64=a=>{let s='';for(const b of new Uint8Array(a))s+=String.fromCharCode(b);return btoa(s)};
+const unb=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const esc=s=>(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const msg=t=>$('msg').textContent=t;
+async function mk(pw,salt){
+ const m=await crypto.subtle.importKey('raw',enc.encode(pw),'PBKDF2',false,['deriveKey']);
+ return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:200000,hash:'SHA-256'},m,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+}
+async function persist(){
+ const iv=crypto.getRandomValues(new Uint8Array(12));
+ const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(JSON.stringify(notes)));
+ localStorage.setItem(K,b64(iv)+'.'+b64(ct));
+}
+function init(){
+ const first=!localStorage.getItem(K);
+ $('pw2').classList.toggle('hide',!first);
+ $('hint').textContent=first?'Prothom bar: notun password set korun. Password bhule gele notes ferot ashbe na.':'Password diye unlock korun.';
+}
+async function unlock(){
+ const pw=$('pw').value;
+ if(pw.length<4)return msg('Komporkhe 4 okkhor din');
+ try{
+  if(!localStorage.getItem(K)){
+   if($('pw2').value!==pw)return msg('Duita password mile ni');
+   const salt=crypto.getRandomValues(new Uint8Array(16));
+   localStorage.setItem(S,b64(salt));
+   key=await mk(pw,salt);notes=[];await persist();
+  }else{
+   key=await mk(pw,unb(localStorage.getItem(S)));
+   const [iv,ct]=localStorage.getItem(K).split('.');
+   notes=JSON.parse(dec.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:unb(iv)},key,unb(ct))));
+  }
+  $('pw').value=$('pw2').value='';msg('');show();
+ }catch(e){key=null;msg('Password vul')}
+}
+function show(){['login','editor'].forEach(i=>$(i).classList.add('hide'));$('list').classList.remove('hide');draw()}
+function draw(){
+ const q=$('q').value.toLowerCase();
+ const L=notes.filter(n=>(n.title+n.text).toLowerCase().includes(q));
+ $('items').innerHTML=L.length?L.map(n=>'<div class="note" onclick="edit('+n.id+')"><b>'+esc(n.title||'(No title)')+'</b><small>'+new Date(n.date).toLocaleString()+'</small></div>').join(''):'<p class="hint">Kono note nei</p>';
+}
+function edit(id){
+ cur=id;const n=notes.find(n=>n.id==id)||{title:'',text:''};
+ $('t').value=n.title;$('x').value=n.text;
+ $('dbtn').style.display=id?'block':'none';
+ $('list').classList.add('hide');$('editor').classList.remove('hide');
+}
+async function saveNote(){
+ const t=$('t').value.trim(),x=$('x').value;
+ if(!t&&!x.trim())return show();
+ const n=notes.find(n=>n.id==cur);
+ if(n){n.title=t;n.text=x;n.date=Date.now()}else notes.unshift({id:Date.now(),title:t,text:x,date:Date.now()});
+ notes.sort((a,b)=>b.date-a.date);
+ await persist();show();
+}
+async function delNote(){
+ if(!confirm('Delete korben?'))return;
+ notes=notes.filter(n=>n.id!=cur);await persist();show();
+}
+function lock(){
+ key=null;notes=[];cur=null;$('q').value='';$('t').value=$('x').value='';
+ ['list','editor'].forEach(i=>$(i).classList.add('hide'));$('login').classList.remove('hide');init();
+}
+function backup(){
+ const d=JSON.stringify({s:localStorage.getItem(S),d:localStorage.getItem(K)});
+ navigator.clipboard.writeText(d).then(()=>alert('Backup copy hoyeche. Kothao (jemon Saved Messages) paste kore rakhun. Eta encrypted, password charai porte parbe na.'));
+}
+function restore(){
+ const t=prompt('Backup text paste korun');if(!t)return;
+ try{const j=JSON.parse(t);if(!j.s||!j.d)throw 0;
+  if(localStorage.getItem(K)&&!confirm('Ekhon-er notes replace hoye jabe. Cholbe?'))return;
+  localStorage.setItem(S,j.s);localStorage.setItem(K,j.d);msg('Restore hoyeche. Purono password diye unlock korun.');init();
+ }catch(e){alert('Backup text thik na')}
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&key)lock()});
+init();
+</script>
+</body>
+</html>
